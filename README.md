@@ -13,4 +13,3 @@
 </p>
 
 ---
-Copyright 2020 Paladium. All rights reserved.
