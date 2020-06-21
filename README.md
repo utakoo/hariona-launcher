@@ -1,4 +1,4 @@
-<p><img  src="./logo.png" height="130px" alt="Paladium"></p>
+<p><img  src="./logo.png" height="130px" alt="hariona"></p>
 
 <h1>hariona Launcher</h1>
 
