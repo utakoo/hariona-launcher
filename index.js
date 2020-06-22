@@ -1,188 +1,230 @@
-/**
- * Paladium Launcher - https://github.com/Paladium-Dev/Paladium-Launcher
- * Copyright (C) 2020 Paladium
- */
-
-const {app, BrowserWindow, ipcMain} = require('electron');
-const autoUpdater = require('electron-updater').autoUpdater;
-const path = require('path');
-const url = require('url');
-const ejse = require('ejs-electron');
-const isDev = require('./app/assets/js/isdev');
+// Requirements
+const { app, BrowserWindow, ipcMain, Menu } = require('electron')
+const autoUpdater                   = require('electron-updater').autoUpdater
+const ejse                          = require('ejs-electron')
+const fs                            = require('fs')
+const isDev                         = require('./app/assets/js/isdev')
+const path                          = require('path')
+const semver                        = require('semver')
+const url                           = require('url')
 
 const APPDATAROOT = process.env.APPDATA;
 const launchconfig = path.join(APPDATAROOT, 'hariona-Launcher');
-app.setPath('userData', launchconfig)
-let frame;
-let console_frame;
-let isInitAutoUpdater = false;
+app.setPath('userData', launchconfig);
+function initAutoUpdater(event, data) {
 
-function initAutoUpdater(event) {
-    autoUpdater.autoDownload = false;
-
-    if (isDev) {
-        autoUpdater.autoInstallOnAppQuit = false;
-        autoUpdater.updateConfigPath = path.join(__dirname, 'dev-app-update.yml');
+    if(data){
+        autoUpdater.allowPrerelease = true
+    } else {
+        // Defaults to true if application version contains prerelease components (e.g. 0.12.1-alpha.1)
+        // autoUpdater.allowPrerelease = true
     }
-    if (process.platform === 'darwin')
-        autoUpdater.autoDownload = false;
-
-    autoUpdater.on('update-available', info => {
-        event.sender.send('autoUpdateNotification', 'update-available', info);
-    });
-    autoUpdater.on('update-downloaded', info => {
-        event.sender.send('autoUpdateNotification', 'update-downloaded', info);
-    });
-    autoUpdater.on('download-progress', (info) => {
-        event.sender.send('autoUpdateNotification', 'download-progress', info);
-    });
-    autoUpdater.on('update-not-available', info => {
-        event.sender.send('autoUpdateNotification', 'update-not-available', info);
-    });
+    
+    if(isDev){
+        autoUpdater.autoInstallOnAppQuit = false
+        autoUpdater.updateConfigPath = path.join(__dirname, 'dev-app-update.yml')
+    }
+    if(process.platform === 'darwin'){
+        autoUpdater.autoDownload = false
+    }
+    autoUpdater.on('update-available', (info) => {
+        event.sender.send('autoUpdateNotification', 'update-available', info)
+    })
+    autoUpdater.on('update-downloaded', (info) => {
+        event.sender.send('autoUpdateNotification', 'update-downloaded', info)
+    })
+    autoUpdater.on('update-not-available', (info) => {
+        event.sender.send('autoUpdateNotification', 'update-not-available', info)
+    })
     autoUpdater.on('checking-for-update', () => {
-        event.sender.send('autoUpdateNotification', 'checking-for-update');
-    });
+        event.sender.send('autoUpdateNotification', 'checking-for-update')
+    })
     autoUpdater.on('error', (err) => {
-        event.sender.send('autoUpdateNotification', 'realerror', err);
-    });
+        event.sender.send('autoUpdateNotification', 'realerror', err)
+    }) 
 }
 
-function initialize() {
-    app.disableHardwareAcceleration();
-
-	if (makeSingleInstance())
-		return app.quit();
-    ipcMain.on('autoUpdateAction', (event, arg, data) => {
-        switch(arg) {
-            case 'initAutoUpdater': {
-                if (!isInitAutoUpdater) {
-                    initAutoUpdater(event);
-                    isInitAutoUpdater = true;
+// Open channel to listen for update actions.
+ipcMain.on('autoUpdateAction', (event, arg, data) => {
+    switch(arg){
+        case 'initAutoUpdater':
+            console.log('Initializing auto updater.')
+            initAutoUpdater(event, data)
+            event.sender.send('autoUpdateNotification', 'ready')
+            break
+        case 'checkForUpdate':
+            autoUpdater.checkForUpdates()
+                .catch(err => {
+                    event.sender.send('autoUpdateNotification', 'realerror', err)
+                })
+            break
+        case 'allowPrereleaseChange':
+            if(!data){
+                const preRelComp = semver.prerelease(app.getVersion())
+                if(preRelComp != null && preRelComp.length > 0){
+                    autoUpdater.allowPrerelease = true
+                } else {
+                    autoUpdater.allowPrerelease = data
                 }
-                event.sender.send('autoUpdateNotification', 'ready');
-                break;
+            } else {
+                autoUpdater.allowPrerelease = data
             }
-            case 'checkForUpdate': {
-                autoUpdater.checkForUpdates().catch(err => {
-                    event.sender.send('autoUpdateNotification', 'realerror', err);
-                });
-                break;
-            }
-            case 'downloadUpdate': {
-                autoUpdater.downloadUpdate();
-                break;
-            }
-            case 'installUpdateNow': {
-                autoUpdater.quitAndInstall();
-                break;
-            }
-            default: {
-                console.log('Unknown argument', arg);
-                break;
-            }
-        }
-    });
+            break
+        case 'installUpdateNow':
+            autoUpdater.quitAndInstall()
+            break
+        default:
+            console.log('Unknown argument', arg)
+            break
+    }
+})
+// Redirect distribution index event from preloader to renderer.
+ipcMain.on('distributionIndexDone', (event, res) => {
+    event.sender.send('distributionIndexDone', res)
+})
 
-    ipcMain.on('consoleAction', (event, arg, type, identifier, data) => {
-        if (console_frame == null)
-            return;
-        switch(arg) {
-            case 'logger': {
-                console_frame.webContents.send('consoleLog', type, identifier, data);
-                break;
-            }
-            case 'show': {
-                console_frame.show();
-                break;
-            }
-            case 'show/hide': {
-                if (console_frame.isVisible())
-                    console_frame.hide();
-                else
-                    console_frame.show();
-                break;
-            }
-        }
-    });
+// Disable hardware acceleration.
+// https://electronjs.org/docs/tutorial/offscreen-rendering
+app.disableHardwareAcceleration()
 
-    app.on('ready', () => {
-        createWindow();
-    });
+// https://github.com/electron/electron/issues/18397
+app.allowRendererProcessReuse = true
 
-    app.on('window-all-closed', () => {
-        if (process.platform !== 'darwin')
-            app.quit();
-    });
-
-    app.on('activate', () => {
-        if (frame === null)
-            createWindow();
-    });
-}
+// Keep a global reference of the window object, if you don't, the window will
+// be closed automatically when the JavaScript object is garbage collected.
+let win
 
 function createWindow() {
-    frame = new BrowserWindow({
-        width: 1280,
-        height: 720,
-        minWidth: 1280,
-        minHeight: 720,
-        icon: getPlatformIcon('icon'),
-        resizable: true,
+
+    win = new BrowserWindow({
+        width: 980,
+        height: 552,
+        icon: getPlatformIcon('SealCircle'),
         frame: false,
         webPreferences: {
             preload: path.join(__dirname, 'app', 'assets', 'js', 'preloader.js'),
             nodeIntegration: true,
-            webSecurity: true,
-            contextIsolation: false,
-            devTools: true
+            contextIsolation: false
         },
-        backgroundColor: '#333336'
-    });
+        backgroundColor: '#171614'
+    })
 
-    //frame.webContents.openDevTools();
+    ejse.data('bkid', Math.floor((Math.random() * fs.readdirSync(path.join(__dirname, 'app', 'assets', 'images', 'backgrounds')).length)))
 
-    frame.loadURL(url.format({
+    win.loadURL(url.format({
         pathname: path.join(__dirname, 'app', 'app.ejs'),
         protocol: 'file:',
         slashes: true
-    }));
+    }))
 
-    frame.removeMenu();
+    /*win.once('ready-to-show', () => {
+        win.show()
+    })*/
 
-    frame.on('closed', () => {
-        frame = null;
-        app.quit();
-    });
+    win.removeMenu()
+
+    win.resizable = true
+
+    win.on('closed', () => {
+        win = null
+    })
 }
 
-function getPlatformIcon(filename) {
-    const os = process.platform;
-    if (os === 'darwin')
-        filename = filename + '.icns';
-    else if (os === 'win32')
-        filename = filename + '.ico';
-    else
-        filename = filename + '.png';
-    return path.join(__dirname, 'app', 'assets', 'images', 'icons', 'favicon', filename);
-}
+function createMenu() {
+    
+    if(process.platform === 'darwin') {
 
-function makeSingleInstance() {
-    const lock = app.requestSingleInstanceLock();
-
-	if (process.mas)
-		return false;
-	if (!lock)
-        app.quit();
-    else {
-        app.on('second-instance', (event, commandLine, workingDirectory) => {
-            if (frame) {
-                if (frame.isMinimized()) {
-                    frame.restore();
-                    frame.focus();
+        // Extend default included application menu to continue support for quit keyboard shortcut
+        let applicationSubMenu = {
+            label: 'Application',
+            submenu: [{
+                label: 'About Application',
+                selector: 'orderFrontStandardAboutPanel:'
+            }, {
+                type: 'separator'
+            }, {
+                label: 'Quit',
+                accelerator: 'Command+Q',
+                click: () => {
+                    app.quit()
                 }
-            }
-        });
+            }]
+        }
+
+        // New edit menu adds support for text-editing keyboard shortcuts
+        let editSubMenu = {
+            label: 'Edit',
+            submenu: [{
+                label: 'Undo',
+                accelerator: 'CmdOrCtrl+Z',
+                selector: 'undo:'
+            }, {
+                label: 'Redo',
+                accelerator: 'Shift+CmdOrCtrl+Z',
+                selector: 'redo:'
+            }, {
+                type: 'separator'
+            }, {
+                label: 'Cut',
+                accelerator: 'CmdOrCtrl+X',
+                selector: 'cut:'
+            }, {
+                label: 'Copy',
+                accelerator: 'CmdOrCtrl+C',
+                selector: 'copy:'
+            }, {
+                label: 'Paste',
+                accelerator: 'CmdOrCtrl+V',
+                selector: 'paste:'
+            }, {
+                label: 'Select All',
+                accelerator: 'CmdOrCtrl+A',
+                selector: 'selectAll:'
+            }]
+        }
+
+        // Bundle submenus into a single template and build a menu object with it
+        let menuTemplate = [applicationSubMenu, editSubMenu]
+        let menuObject = Menu.buildFromTemplate(menuTemplate)
+
+        // Assign it to the application
+        Menu.setApplicationMenu(menuObject)
+
     }
+
 }
 
-initialize();
+function getPlatformIcon(filename){
+    let ext
+    switch(process.platform) {
+        case 'win32':
+            ext = 'ico'
+            break
+        case 'darwin':
+        case 'linux':
+        default:
+            ext = 'png'
+            break
+    }
+
+    return path.join(__dirname, 'app', 'assets', 'images', `${filename}.${ext}`)
+}
+
+app.on('ready', createWindow)
+app.on('ready', createMenu)
+
+app.on('window-all-closed', () => {
+    // On macOS it is common for applications and their menu bar
+    // to stay active until the user quits explicitly with Cmd + Q
+    if (process.platform !== 'darwin') {
+        app.quit()
+    }
+})
+
+app.on('activate', () => {
+    // On macOS it's common to re-create a window in the app when the
+    // dock icon is clicked and there are no other windows open.
+    if (win === null) {
+        createWindow()
+    }
+})
